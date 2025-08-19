@@ -21,15 +21,10 @@ public class AzureDevOpsService : IDisposable
         _vssWorkitemTrackingClient = connection.GetClient<WorkItemTrackingHttpClient>();
         _projectName = projectName;
     }
-
-    public async Task<WorkItem> GetWorkItemAsync(int workItemId)
-    {
-        return await _vssWorkitemTrackingClient.GetWorkItemAsync(workItemId, expand: WorkItemExpand.All);
-    }
-
+    
     public async Task<AssignmentRelatedWork> GetAssignmentRelatedWorkAsync(int workItemId)
     {
-        var workItem = await _vssWorkitemTrackingClient.GetWorkItemAsync(workItemId, expand: WorkItemExpand.All);
+        var workItem = await _vssWorkitemTrackingClient.GetWorkItemAsync(workItemId, expand: WorkItemExpand.Relations);
         var assignedToDetails = (IdentityRef)workItem.Fields["System.AssignedTo"];
 
         var reposWork = await GetRepositoryWork(workItem.Relations, workItemId);
