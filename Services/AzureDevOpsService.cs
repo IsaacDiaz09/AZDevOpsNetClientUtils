@@ -1,5 +1,6 @@
 ﻿using AzureDevopsUtils.Common;
 using AzureDevopsUtils.Domain;
+using Microsoft.Azure.DevOps.Comments.WebApi;
 using Microsoft.TeamFoundation.SourceControl.WebApi;
 using Microsoft.TeamFoundation.WorkItemTracking.WebApi;
 using Microsoft.TeamFoundation.WorkItemTracking.WebApi.Models;
@@ -21,7 +22,7 @@ public class AzureDevOpsService : IDisposable
         _vssWorkitemTrackingClient = connection.GetClient<WorkItemTrackingHttpClient>();
         _projectName = projectName;
     }
-    
+
     public async Task<AssignmentRelatedWork> GetAssignmentRelatedWorkAsync(int workItemId)
     {
         var workItem = await _vssWorkitemTrackingClient.GetWorkItemAsync(workItemId, expand: WorkItemExpand.Relations);
@@ -61,7 +62,7 @@ public class AzureDevOpsService : IDisposable
         foreach (var gitRepo in gitBranchesXRepository)
         {
             var gitRepositoryId = gitRepo.Key;
-            var gitChanges = new HashSet<Pair<GitCommit, GitCommitChanges>>();
+            var gitChanges = new HashSet<GitCommit>();
             foreach (var gitBranch in gitRepo)
             {
                 var allGitChanges = await GetBranchDiffs(gitRepositoryId, gitBranch.Name, Commons.GetParentBranch(gitBranch.Name));
@@ -73,7 +74,7 @@ public class AzureDevOpsService : IDisposable
         return gitReposWork;
     }
 
-    private async Task<GitRepositoryWork> BuildRepositoryWork(HashSet<Pair<GitCommit, GitCommitChanges>> gitChanges, Guid repositoryId, int workItemId)
+    private async Task<GitRepositoryWork> BuildRepositoryWork(HashSet<GitCommit> gitChanges, Guid repositoryId, int workItemId)
     {
         var repository = await _vssGitClient.GetRepositoryAsync(repositoryId: repositoryId);
         return new GitRepositoryWork
@@ -83,21 +84,19 @@ public class AzureDevOpsService : IDisposable
         };
     }
 
-    private static IEnumerable<Commit> BuildCommmitsWork(HashSet<Pair<GitCommit, GitCommitChanges>> gitChanges, int workItemId)
+    private static IEnumerable<Commit> BuildCommmitsWork(HashSet<GitCommit> gitChanges, int workItemId)
     {
         return gitChanges
-            .Where(pair => pair.Left.Comment.Contains($"#{workItemId}"))
-            .Select(pair =>
+            .Where(commit => commit.Comment.Contains($"#{workItemId}"))
+            .Select(commit =>
         {
-            var commit = pair.Left;
-            var changes = pair.Right;
             return new Commit
             {
                 CommitId = commit.CommitId,
-                ChangeCounts = changes.ChangeCounts,
+                ChangeCounts = commit.ChangeCounts,
                 Comment = commit.Comment,
                 Date = commit.Committer.Date,
-                Changes = changes.Changes.Where(change => change.Item.GitObjectType == GitObjectType.Blob)
+                Changes = commit.Changes.Where(change => change.Item.GitObjectType == GitObjectType.Blob)
                             .Select(change =>
                             {
                                 return new Change
@@ -111,9 +110,9 @@ public class AzureDevOpsService : IDisposable
         });
     }
 
-    private async Task<ImmutableHashSet<Pair<GitCommit, GitCommitChanges>>> GetBranchDiffs(Guid repositoryId, string sourceBranch, string targetBranch)
+    private async Task<ImmutableHashSet<GitCommit>> GetBranchDiffs(Guid repositoryId, string sourceBranch, string targetBranch)
     {
-        var changes = new HashSet<Pair<GitCommit, GitCommitChanges>>();
+        var changes = new HashSet<GitCommit>();
 
         int skip = 0;
         while (true)
@@ -137,10 +136,9 @@ public class AzureDevOpsService : IDisposable
             skip += 100;
 
 
-            var gitChanges = await Task.WhenAll(gitCommits.Select(async (commit, _) => new Pair<GitCommit, GitCommitChanges>(
-                await _vssGitClient.GetCommitAsync(repositoryId: repositoryId, commitId: commit.CommitId),
-                await _vssGitClient.GetChangesAsync(project: _projectName, repositoryId: repositoryId.ToString(), commitId: commit.CommitId)
-            )));
+            var gitChanges = await Task.WhenAll(gitCommits.Select(async (commit, _) =>
+                await _vssGitClient.GetCommitAsync(repositoryId: repositoryId, commitId: commit.CommitId, changeCount: 500)
+            ));
 
             changes.AddRange(gitChanges);
 
